@@ -6,6 +6,9 @@ import { model } from "./model";
 import { tools } from "./tools";
 import { SYSTEM_PROMPT } from "./system-prompt";
 
+
+const MAX_STEPS = 10;
+
 // This is the seam the whole course lives in.
 //
 // Right now it is a STUB: it announces a workflow, logs that nothing is wired
@@ -31,6 +34,40 @@ export async function runAgent(opts: { input: string; emit: Emit }): Promise<voi
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: input }
   ];
+  let step = 0;
+  while (step < MAX_STEPS) {
+    const result = await streamText({model,messages});
+
+    for await(const part of result.fullstream) {
+      switch(part.type) {
+        case "text-delta":
+          emit({ type: EventType.ModelDelta, workflowId, text: part.text });
+          break;
+        case "tool-call":
+          emit({
+            type: EventType.ToolRequested,
+            workflowId,
+            toolCallId: part.toolCallId,
+            name: part.toolName,
+            args: part.input,
+          });
+          break;
+        case "tool-result":
+          emit({
+            type: EventType.ToolCompleted,
+            workflowId,
+            toolCallId: part.toolCallId,
+            result: part.output,
+          });
+          break;
+        case "error":
+          emit({ type: EventType.WorkflowFailed, workflowId, error: String(part.error) });
+          return;
+      }
+    }
+      
+
+  }
 
   emit({
     type: EventType.Log,

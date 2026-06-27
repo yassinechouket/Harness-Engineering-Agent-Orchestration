@@ -40,12 +40,22 @@ export const tools = {
     }),
     execute: async ({ itemId, category }) => ({ok:true,itemId,category})
   }),
-  draftReplay:tool({
+  draftReply: tool({
     description: "Write a draft reply for a work item. Does not send anything.",
-    inputSchema: z.object({ itemId: z.string(), message: z.string() }),
-    execute:async()=>{
-
-    }
-  })
+    inputSchema: z.object({
+      itemId: z.string(),
+      message: z.string(),
+    }),
+    execute: async ({ itemId }) => ({ ok: true, draftId: `draft-${itemId}` }),
+  }),
+  sendReply: tool({
+    description: "Send the drafted reply to the customer. This really emails them.",
+    inputSchema: z.object({
+      itemId: z.string(),
+      draftId: z.string(),
+    }),
+    // DANGEROUS: an irreversible side effect with zero confirmation.
+    execute: async ({ itemId, draftId }) => ({ sent: true, itemId, draftId }),
+  }),
 };
 
