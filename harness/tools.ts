@@ -1,6 +1,5 @@
 import {tool} from "ai"
-import {z} from "zed"
-
+import { z } from "zod";
 const KNOWLEDGE_BASE: Record<string, string> = {
   billing:
     "Double charges are usually a duplicate authorization that drops off in 3–5 days. If it already settled, refund immediately.",

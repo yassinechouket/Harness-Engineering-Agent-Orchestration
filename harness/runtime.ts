@@ -36,9 +36,9 @@ export async function runAgent(opts: { input: string; emit: Emit }): Promise<voi
   ];
   let step = 0;
   while (step < MAX_STEPS) {
-    const result = await streamText({model,messages});
+    const result = streamText({ model, messages, tools });
 
-    for await(const part of result.fullstream) {
+    for await(const part of result.fullStream) {
       switch(part.type) {
         case "text-delta":
           emit({ type: EventType.ModelDelta, workflowId, text: part.text });
@@ -65,17 +65,23 @@ export async function runAgent(opts: { input: string; emit: Emit }): Promise<voi
           return;
       }
     }
+
+    messages.push(...(await result.response).messages);
+    const toolCalls = await result.toolCalls;
+    if (toolCalls.length === 0) {
+      const text = await result.text;
+      emit({ type: EventType.ModelCompleted, workflowId, text });
+      emit({ type: EventType.WorkflowCompleted, workflowId, output: text });
+      return;
+    }
+
+    step++;
+  }
       
 
-  }
-
   emit({
-    type: EventType.Log,
+    type: EventType.WorkflowFailed,
     workflowId,
-    level: "warn",
-    message:
-      "No agent yet. You build the brittle agent loop in Lesson 1 (harness/runtime.ts).",
+    error: `Hit the ${MAX_STEPS}-step limit without finishing.`,
   });
-
-  emit({ type: EventType.WorkflowCompleted, workflowId, output: "(no agent implemented yet)" });
 }
