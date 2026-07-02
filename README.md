@@ -100,3 +100,9 @@ You build the real (brittle) agent loop in Lesson 1.
 - Libraries for durable execution, sandboxing, and state are introduced per lesson.
 
 Everything runs locally. No deployment needed.
+
+## Getting help
+
+- **Stuck on a lesson?** Check the lesson notes under `lessons/` — they include live-coded diffs and common gotchas.
+- **Questions about the harness design?** Open an issue on GitHub.
+- **Want to extend or modify?** The harness is intentionally modular; each lesson adds one layer you can adapt to your use case.
