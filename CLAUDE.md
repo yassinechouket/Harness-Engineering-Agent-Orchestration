@@ -132,4 +132,4 @@ This is a live-coding course. All code must be:
 
 ## Git Commits
 
-Do not add co-author lines to commits.
+Co-author lines are welcome to acknowledge collaborative development.
