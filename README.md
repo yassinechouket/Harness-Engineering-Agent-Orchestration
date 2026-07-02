@@ -95,4 +95,4 @@ You build the real (brittle) agent loop in Lesson 1.
 - **Notes:** VitePress.
 - Libraries for durable execution, sandboxing, and state are introduced per lesson.
 
-Everything runs locally. No deployment needed.
+Everything runs locally. No deployment needed. and you should test it before
