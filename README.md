@@ -6,6 +6,10 @@ A one-day, hands-on workshop on the infrastructure layer around an LLM — the *
 makes agents survive production. Move past basic while-loops and API wrappers and learn the
 patterns that keep agents durable, isolated, memory-aware, and coordinated.
 
+**Note:** This is a systems workshop, not an "agent app" workshop. The LLM agent is deliberately simple
+and domain-neutral; the **harness is the protagonist**. You're building the production-grade runtime that
+wraps the agent, not the agent itself.
+
 Instead of one large cumulative project, each lesson tackles a **new architectural pattern**: you
 see it introduced, watch it live-coded in TypeScript/Node.js, and move on.
 
