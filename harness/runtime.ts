@@ -1,87 +1,145 @@
+import { DBOS } from "@dbos-inc/dbos-sdk";
 import { streamText } from "ai";
-import type { ModelMessage } from "ai";
-import { randomUUID } from "node:crypto";
-import { EventType, type Emit } from "@shared/events";
+import type { ModelMessage, JSONValue } from "ai";
+import { EventType } from "@shared/events";
+import { emit } from "./bus";
 import { model } from "./model";
-import { tools } from "./tools";
+import { tools, runTool } from "./tools";
 import { SYSTEM_PROMPT } from "./system-prompt";
 
-
+// A safety cap so a confused model can't loop forever.
 const MAX_STEPS = 10;
 
-// This is the seam the whole course lives in.
-//
-// Right now it is a STUB: it announces a workflow, logs that nothing is wired
-// up yet, and finishes. The starter app runs end-to-end (browser → socket →
-// server → bus → browser) with this hole in the middle.
-//
-// In LESSON 1 you replace the body with the brittle agent loop:
-//   - call the model (streamText) with the task as the prompt
-//   - stream tokens out as `model.delta` events
-//   - when the model asks for a tool, run it and emit `tool.requested` /
-//     `tool.completed`, then feed the result back to the model
-//   - repeat until the model stops asking for tools
-//
-// Then you spend the rest of the day discovering everything this naive loop
-// gets wrong in production, and building the harness that fixes it.
-export async function runAgent(opts: { input: string; emit: Emit }): Promise<void> {
-  const { input, emit } = opts;
-  const workflowId = randomUUID();
+type ToolCall = { toolCallId: string; toolName: string; input: Record<string, unknown> };
+type Turn = { text: string; toolCalls: ToolCall[]; responseMessages: ModelMessage[] };
 
-  emit({ type: EventType.WorkflowStarted, workflowId, input });
+// One model turn: stream the tokens out as events, then return the assistant's
+// message(s) and any tool calls. We run this as a DBOS step, so a completed turn
+// is checkpointed and never re-called — a crash won't re-bill the LLM.
+async function modelTurn(workflowId: string, messages: ModelMessage[]): Promise<Turn> {
+  const result = streamText({ model, messages, tools });
 
-  const messages:ModelMessage[] = [
+  for await (const part of result.fullStream) {
+    if (part.type === "text-delta") {
+      await emit({ type: EventType.ModelDelta, workflowId, text: part.text });
+    }
+  }
+
+  const rawCalls = await result.toolCalls;
+  return {
+    text: await result.text,
+    toolCalls: rawCalls.map((c) => ({
+      toolCallId: c.toolCallId,
+      toolName: c.toolName,
+      input: c.input as Record<string, unknown>,
+    })),
+    responseMessages: (await result.response).messages,
+  };
+}
+
+// Execute one tool. We run this as a DBOS step so its side effect (e.g.
+// sendReply actually emailing someone) runs EXACTLY ONCE — a completed tool step
+// is never re-run when DBOS recovers the workflow after a crash.
+async function toolStep(
+  workflowId: string,
+  call: ToolCall,
+): Promise<Record<string, unknown>> {
+  await emit({
+    type: EventType.ToolRequested,
+    workflowId,
+    toolCallId: call.toolCallId,
+    name: call.toolName,
+    args: call.input,
+  });
+  const output = await runTool(call.toolName, call.input);
+  await emit({
+    type: EventType.ToolCompleted,
+    workflowId,
+    toolCallId: call.toolCallId,
+    result: output,
+  });
+  return output;
+}
+
+// THE DURABLE AGENT LOOP.
+//
+// Structurally it's the same while-loop as Lesson 1 — but every model call and
+// every tool call is a DBOS step. DBOS checkpoints each step's result to
+// Postgres. If the process crashes mid-run, DBOS recovers this workflow on the
+// next launch and resumes from the last completed step: no repeated LLM calls,
+// no duplicate sends, no lost work.
+//
+// The catch: the workflow body itself re-runs on recovery, so it must be
+// deterministic. All non-determinism (the model, the tools, the clock) lives
+// inside steps — the body just orchestrates and rebuilds `messages` from the
+// cached step results.
+async function agentWorkflow(input: string): Promise<string> {
+  const workflowId = DBOS.workflowID ?? "unknown";
+
+  await DBOS.runStep(
+    () => emit({ type: EventType.WorkflowStarted, workflowId, input }),
+    { name: "started" },
+  );
+
+  const messages: ModelMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: input }
+    { role: "user", content: input },
   ];
+
   let step = 0;
   while (step < MAX_STEPS) {
-    const result = streamText({ model, messages, tools });
+    const turn = await DBOS.runStep(() => modelTurn(workflowId, messages), {
+      name: `model-${step}`,
+    });
+    messages.push(...turn.responseMessages);
 
-    for await(const part of result.fullStream) {
-      switch(part.type) {
-        case "text-delta":
-          emit({ type: EventType.ModelDelta, workflowId, text: part.text });
-          break;
-        case "tool-call":
-          emit({
-            type: EventType.ToolRequested,
-            workflowId,
-            toolCallId: part.toolCallId,
-            name: part.toolName,
-            args: part.input,
-          });
-          break;
-        case "tool-result":
-          emit({
-            type: EventType.ToolCompleted,
-            workflowId,
-            toolCallId: part.toolCallId,
-            result: part.output,
-          });
-          break;
-        case "error":
-          emit({ type: EventType.WorkflowFailed, workflowId, error: String(part.error) });
-          return;
-      }
+    if (turn.toolCalls.length === 0) {
+      await DBOS.runStep(
+        () => emit({ type: EventType.ModelCompleted, workflowId, text: turn.text }),
+        { name: `model-done-${step}` },
+      );
+      await DBOS.runStep(
+        () => emit({ type: EventType.WorkflowCompleted, workflowId, output: turn.text }),
+        { name: "completed" },
+      );
+      return turn.text;
     }
 
-    messages.push(...(await result.response).messages);
-    const toolCalls = await result.toolCalls;
-    if (toolCalls.length === 0) {
-      const text = await result.text;
-      emit({ type: EventType.ModelCompleted, workflowId, text });
-      emit({ type: EventType.WorkflowCompleted, workflowId, output: text });
-      return;
+    for (const call of turn.toolCalls) {
+      const output = await DBOS.runStep(() => toolStep(workflowId, call), {
+        name: `tool-${call.toolCallId}`,
+      });
+      // Feed the tool result back to the model on the next turn.
+      messages.push({
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            output: { type: "json", value: output as JSONValue },
+          },
+        ],
+      });
     }
 
     step++;
   }
-      
 
-  emit({
-    type: EventType.WorkflowFailed,
-    workflowId,
-    error: `Hit the ${MAX_STEPS}-step limit without finishing.`,
-  });
+  await DBOS.runStep(
+    () =>
+      emit({
+        type: EventType.WorkflowFailed,
+        workflowId,
+        error: `Hit the ${MAX_STEPS}-step limit without finishing.`,
+      }),
+    { name: "failed" },
+  );
+  return "";
 }
+
+// Register the workflow with DBOS. `runAgentWorkflow` is the durable, recoverable
+// version of Lesson 1's `runAgent`.
+export const runAgentWorkflow = DBOS.registerWorkflow(agentWorkflow, {
+  name: "agentWorkflow",
+});
