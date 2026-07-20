@@ -6,6 +6,13 @@ import { emit } from "./bus";
 import { model } from "./model";
 import { tools, runTool } from "./tools";
 import { SYSTEM_PROMPT } from "./system-prompt";
+import {
+  buildContext,
+  summarize,
+  estimateTokens,
+  MAX_CONTEXT_TOKENS,
+  KEEP_CONTEXT_TOKENS,
+} from "./memory";
 
 // A safety cap so a confused model can't loop forever.
 const MAX_STEPS = 10;
